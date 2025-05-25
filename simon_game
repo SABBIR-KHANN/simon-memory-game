@@ -1,0 +1,450 @@
+from machine import Pin, PWM, I2C
+from time import sleep
+import time
+import random
+import network
+import urequests
+import ssd1306
+
+# Constants
+freqs = [262, 330, 392, 523]
+LEVEL_COMPLETE_DELAY = 1.5  # Delay in seconds after completing a level
+
+# WiFi Credentials (replace with your own)
+SSID = 'SAH'
+PASSWORD = 'sah_uttara@2023'
+
+# Google Script URL (replace with your own)
+GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwG0nkvZiuzBrN3_mgK8SqxeeasFD9-z69aemNERuk_yRHpJad7btX-3G-6lp18fUpC/exec'
+
+# Game settings
+MAX_LEVEL = 100
+button_pins = [2, 4, 13, 27]  # Pins for the 4 game buttons
+led_pins = [19, 16, 18, 5]    # Pins for the 4 LEDs
+start_button_pin = 33         # Pin for the start button
+buzzer_pin = 26               # Pin for the buzzer
+
+# Hardware setup
+buttons = [Pin(pin, Pin.IN, Pin.PULL_UP) for pin in button_pins]
+leds = [Pin(pin, Pin.OUT) for pin in led_pins]
+start_button = Pin(start_button_pin, Pin.IN, Pin.PULL_UP)
+buzzer = PWM(Pin(buzzer_pin), freq=1000, duty=0)
+
+# I2C for OLED display
+i2c = I2C(scl=Pin(22), sda=Pin(21))
+oled = ssd1306.SSD1306_I2C(128, 64, i2c)
+
+# Initial boot display
+sleep(1)
+oled.fill(0)
+oled.text('Booting...', 0, 0)
+oled.show()
+sleep(1)
+
+# Game variables for Simon Memory
+sequence = [0] * MAX_LEVEL
+level = 1
+delay_time = 1000  # Initial delay in milliseconds
+player_id = None
+wifi_connected = False  # Global Wi-Fi status flag
+
+# Startup beep
+def startup_beep():
+    buzzer.freq(1000)
+    buzzer.duty(300)
+    sleep(0.2)
+    buzzer.duty(0)
+
+startup_beep()
+
+# Connect to Wi-Fi
+def connect_wifi():
+    global wifi_connected
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        oled.fill(0)
+        oled.text('Connecting...', 0, 20)
+        oled.show()
+        wlan.connect(SSID, PASSWORD)
+        start_time = time.ticks_ms()
+        timeout = 10000  # 10-second timeout
+        while not wlan.isconnected():
+            if time.ticks_diff(time.ticks_ms(), start_time) > timeout:
+                print("Wi-Fi connection timed out")
+                oled.fill(0)
+                oled.text('No WiFi', 0, 20)
+                oled.show()
+                sleep(2)
+                return
+            sleep(0.1)
+    ip = wlan.ifconfig()[0]
+    print('Connected to WiFi:', ip)
+    oled.fill(0)
+    oled.text('WiFi Connected', 0, 0)
+    oled.text(ip, 0, 20)
+    oled.show()
+    sleep(2)
+    wifi_connected = True
+
+# Send score to Google Sheets
+def send_score_to_google(player_id, score):
+    if not wifi_connected:
+        print("Wi-Fi not connected, cannot send score")
+        return
+    try:
+        url = GOOGLE_SHEET_URL
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        data = 'id={}&level={}'.format(player_id, score)
+        response = urequests.post(url, data=data, headers=headers)
+        print('Google Sheet Response:', response.text)
+        response.close()
+        oled.fill(0)
+        oled.text('Score Sent!', 0, 20)
+        oled.show()
+        sleep(2)
+    except Exception as e:
+        print('Failed to send:', e)
+        oled.fill(0)
+        oled.text('Send Failed', 0, 20)
+        oled.show()
+        sleep(2)
+
+# Game selection menu
+def select_game():
+    selected = 1  # Default to Memory Game
+    while True:
+        oled.fill(0)
+        oled.text("Select Game:", 0, 0)
+        oled.text("1. Memory Game" + (" <" if selected == 1 else ""), 0, 20)
+        oled.text("2. Snake Game" + (" <" if selected == 2 else ""), 0, 30)
+        oled.show()
+
+        if buttons[0].value() == 0:  # Pin 2: Up
+            selected = 1
+            while buttons[0].value() == 0:
+                sleep(0.01)
+        if buttons[2].value() == 0:  # Pin 13: Down
+            selected = 2
+            while buttons[2].value() == 0:
+                sleep(0.01)
+        if start_button.value() == 0:  # Pin 33: Confirm
+            while start_button.value() == 0:
+                sleep(0.01)
+            oled.fill(0)
+            oled.text("Starting...", 0, 20)
+            oled.show()
+            sleep(1)
+            return selected
+
+# Input player ID using buttons (for Memory Game)
+def input_player_id():
+    id_chars = []
+    current_digit = 0
+    oled.fill(0)
+    oled.text("Enter ID:", 0, 0)
+    oled.text(str(current_digit), 50, 20)
+    oled.show()
+
+    def update_display():
+        oled.fill(0)
+        oled.text("ID: " + ''.join(id_chars), 0, 0)
+        oled.text("Sel: " + str(current_digit), 0, 30)
+        oled.show()
+
+    update_display()
+
+    while True:
+        if buttons[0].value() == 0:  # SELECT DIGIT (pin 2)
+            if len(id_chars) < 10:
+                id_chars.append(str(current_digit))
+                update_display()
+            while buttons[0].value() == 0:
+                sleep(0.01)
+
+        if buttons[1].value() == 0:  # INCREMENT (pin 4)
+            current_digit = (current_digit + 1) % 10
+            update_display()
+            while buttons[1].value() == 0:
+                sleep(0.01)
+
+        if buttons[2].value() == 0:  # DELETE (pin 13)
+            if id_chars:
+                id_chars.pop()
+                update_display()
+            while buttons[2].value() == 0:
+                sleep(0.01)
+
+        if buttons[3].value() == 0:  # DECREMENT (pin 27)
+            current_digit = (current_digit - 1) % 10
+            update_display()
+            while buttons[3].value() == 0:
+                sleep(0.01)
+
+        if start_button.value() == 0:  # CONFIRM
+            if len(id_chars) > 0:
+                oled.fill(0)
+                oled.text("ID Confirmed", 10, 20)
+                oled.show()
+                sleep(1)
+                return ''.join(id_chars)
+            while start_button.value() == 0:
+                sleep(0.01)
+
+# Snake Game
+def play_snake_game():
+    # Snake game constants
+    GRID_WIDTH = 16   # 128 / 8 = 16 cells
+    GRID_HEIGHT = 8   # 64 / 8 = 8 cells
+    CELL_SIZE = 8     # Grid cell size for positioning
+    SNAKE_SIZE = 4    # Smaller size for thinner snake (4x4 pixels)
+    SNAKE_SPEED = 0.5 # Seconds per move
+    UP = (0, -1)
+    DOWN = (0, 1)
+    LEFT = (-1, 0)
+    RIGHT = (1, 0)
+
+    # Initialize snake
+    snake = [(8, 4)]  # Start in middle
+    direction = RIGHT  # Initial direction
+    score = 0
+
+    # Initialize food
+    def place_food():
+        while True:
+            x = random.randint(0, GRID_WIDTH - 1)
+            y = random.randint(0, GRID_HEIGHT - 1)
+            if (x, y) not in snake:
+                return (x, y)
+
+    food = place_food()
+
+    def play_eat_tone():
+        buzzer.freq(500)
+        buzzer.duty(400)
+        sleep(0.1)
+        buzzer.duty(0)
+
+    def draw_game():
+        oled.fill(0)
+        # Draw snake (thinner: 4x4 pixels)
+        for x, y in snake:
+            oled.fill_rect(x * CELL_SIZE + 2, y * CELL_SIZE + 2, SNAKE_SIZE, SNAKE_SIZE, 1)
+        # Draw food
+        fx, fy = food
+        oled.fill_rect(fx * CELL_SIZE + 2, fy * CELL_SIZE + 2, 4, 4, 1)
+        oled.show()
+
+    def pause_game():
+        oled.fill(0)
+        oled.text("Paused", 40, 20)
+        oled.text("Press Start", 20, 30)
+        oled.show()
+        while True:
+            if start_button.value() == 0:  # Wait for start button press to resume
+                while start_button.value() == 0:  # Debounce
+                    sleep(0.01)
+                break
+        draw_game()  # Redraw game state when resuming
+
+    game_over = False
+    last_move = time.ticks_ms()
+    paused = False  # Track pause state
+
+    while not game_over:
+        # Check for pause
+        if start_button.value() == 0:  # Start button pressed
+            paused = not paused  # Toggle pause state
+            if paused:
+                pause_game()  # Enter pause mode
+            while start_button.value() == 0:  # Debounce
+                sleep(0.01)
+
+        if paused:
+            continue  # Skip game updates while paused
+
+        # Handle button inputs for movement
+        if buttons[0].value() == 0 and direction != DOWN:  # Up (pin 2)
+            direction = UP
+            leds[0].on()
+            sleep(0.05)
+            leds[0].off()
+            while buttons[0].value() == 0:
+                sleep(0.01)
+        if buttons[1].value() == 0 and direction != LEFT:  # Right (pin 4)
+            direction = RIGHT
+            leds[1].on()
+            sleep(0.05)
+            leds[1].off()
+            while buttons[1].value() == 0:
+                sleep(0.01)
+        if buttons[2].value() == 0 and direction != UP:  # Down (pin 13)
+            direction = DOWN
+            leds[2].on()
+            sleep(0.05)
+            leds[2].off()
+            while buttons[2].value() == 0:
+                sleep(0.01)
+        if buttons[3].value() == 0 and direction != RIGHT:  # Left (pin 27)
+            direction = LEFT
+            leds[3].on()
+            sleep(0.05)
+            leds[3].off()
+            while buttons[3].value() == 0:
+                sleep(0.01)
+
+        # Update snake position
+        if time.ticks_diff(time.ticks_ms(), last_move) >= SNAKE_SPEED * 1000:
+            # Move snake
+            head_x, head_y = snake[0]
+            dx, dy = direction
+            new_head = (head_x + dx, head_y + dy)
+
+            # Check collisions
+            if (new_head in snake or
+                new_head[0] < 0 or new_head[0] >= GRID_WIDTH or
+                new_head[1] < 0 or new_head[1] >= GRID_HEIGHT):
+                game_over = True
+                continue
+
+            # Add new head
+            snake.insert(0, new_head)
+
+            # Check food collision
+            if new_head == food:
+                score += 1
+                food = place_food()
+                play_eat_tone()
+            else:
+                snake.pop()  # Remove tail
+
+            draw_game()
+            last_move = time.ticks_ms()
+
+    # Game over
+    play_failure_tone()
+    oled.fill(0)
+    oled.text("Game Over!", 20, 20)
+    oled.text("Score: " + str(score), 20, 30)
+    oled.show()
+
+    # Send score to Google Sheets if Wi-Fi connected
+    if wifi_connected and player_id:
+        send_score_to_google(player_id, score)
+
+    sleep(3)
+    
+# Simon Memory Game Functions
+def wait_for_start():
+    print("Waiting to start...")
+    oled.fill(0)
+    oled.text("Press Start", 20, 25)
+    oled.show()
+    while start_button.value():
+        sleep(0.01)
+    sleep(0.2)
+    global level, delay_time
+    level = 1
+    delay_time = 1000
+    oled.fill(0)
+    oled.show()
+
+def generate_sequence():
+    global sequence
+    sequence = [random.randint(0, 3) for _ in range(MAX_LEVEL)]
+
+def play_tone(freq, duration):
+    buzzer.freq(freq)
+    buzzer.duty(400)
+    sleep(duration / 1000)
+    buzzer.duty(0)
+
+def play_sequence():
+    for i in range(level):
+        idx = sequence[i]
+        leds[idx].on()
+        play_tone(freqs[idx], delay_time)
+        leds[idx].off()
+        sleep(0.2)
+
+def wait_for_button_press():
+    while True:
+        for i, btn in enumerate(buttons):
+            if btn.value() == 0:
+                sleep(0.05)
+                while btn.value() == 0:
+                    pass
+                return i
+
+def get_player_input():
+    for i in range(level):
+        pressed = wait_for_button_press()
+        if pressed != sequence[i]:
+            return False
+        leds[pressed].on()
+        play_tone(freqs[pressed], 200)
+        leds[pressed].off()
+        sleep(0.15)
+    return True
+
+def play_failure_tone():
+    for _ in range(3):
+        for led in leds:
+            led.on()
+        play_tone(200, 200)
+        for led in leds:
+            led.off()
+        sleep(0.2)
+    oled.fill(0)
+    oled.text("Game Over!", 20, 20)
+    oled.show()
+
+def play_success_tone():
+    for freq in [262, 330, 392]:
+        play_tone(freq, 100)
+        sleep(0.05)
+
+def reset_game():
+    global level, delay_time
+    level = 1
+    delay_time = 1000
+
+def display_level():
+    oled.fill(0)
+    oled.text("Level:", 10, 20)
+    oled.text(str(level), 70, 20)
+    oled.show()
+
+# Main program
+while True:
+    game_choice = select_game()
+    
+    if game_choice == 1:  # Simon Memory Game
+        connect_wifi()
+        if wifi_connected:
+            player_id = input_player_id()
+        else:
+            player_id = None
+        wait_for_start()
+        generate_sequence()
+        display_level()
+        while True:
+            play_sequence()
+            if not get_player_input():
+                play_failure_tone()
+                if wifi_connected:
+                    send_score_to_google(player_id, level - 1)
+                reset_game()
+                break
+            level += 1
+            if delay_time > 300:
+                delay_time -= 50
+            play_success_tone()
+            display_level()
+            sleep(LEVEL_COMPLETE_DELAY)
+    else:  # Snake Game
+        if wifi_connected:
+            player_id = input_player_id()
+        else:
+            player_id = None
+        play_snake_game()
