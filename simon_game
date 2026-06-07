@@ -11,8 +11,8 @@ freqs = [262, 330, 392, 523]
 LEVEL_COMPLETE_DELAY = 1.5  # Delay in seconds after completing a level
 
 # WiFi Credentials (replace with your own)
-SSID = 'SAH'
-PASSWORD = 'sah_uttara@2023'
+SSID = '***********'
+PASSWORD = '**************'
 
 # Google Script URL (replace with your own)
 GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwG0nkvZiuzBrN3_mgK8SqxeeasFD9-z69aemNERuk_yRHpJad7btX-3G-6lp18fUpC/exec'
